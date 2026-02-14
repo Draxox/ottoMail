@@ -1,35 +1,34 @@
-from typing import Annotated, TypedDict, List, Optional
+"""Shared state management for LangGraph"""
+from typing import TypedDict, List, Optional, Annotated
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
 class EmailAgentState(TypedDict):
-    """
-    Shared state across all agent nodes
-    Pro: Type-safe state management prevents errors
-    """
+    """Complete agent state"""
     # Input
     messages: Annotated[List[BaseMessage], add_messages]
     email_id: str
     email_from: str
     email_subject: str
     email_body: str
+    thread_id: str
     
-    # Processing stages
-    extracted_data: Optional[dict]  # Client requirements extraction
-    project_plan: Optional[dict]    # Task breakdown
-    cost_estimate: Optional[dict]   # Pricing calculation
-    proposal_text: Optional[str]    # Generated proposal
+    # Extracted data
+    client_name: Optional[str]
+    company: Optional[str]
+    project_type: Optional[str]
+    requirements: Optional[List[str]]
+    timeline: Optional[str]
+    budget: Optional[str]
     
-    # Database IDs
-    client_id: Optional[str]
-    proposal_id: Optional[str]
+    # Generated content
+    project_plan: Optional[dict]
+    cost_estimate: Optional[dict]
+    proposal_text: Optional[str]
     
-    # Decision flags
+    # Control flags
     is_valid_inquiry: bool
+    confidence_score: float
     needs_human_review: bool
-    approval_status: Optional[str]
-    
-    # Metadata
-    processing_step: str
-    error_message: Optional[str]
-    confidence_score: float  # AI extraction confidence
+    current_step: str
+    error: Optional[str]

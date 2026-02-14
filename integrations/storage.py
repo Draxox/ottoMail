@@ -1,79 +1,85 @@
-from supabase import create_client, Client
-from typing import Dict, Optional, List
-from uuid import UUID
-import os
+"""Database storage service"""
+from sqlalchemy.orm import Session
+from app.models import SessionLocal, Client, Proposal
+import json
 
 class StorageService:
-    """
-    MCP-compliant storage interface
-    Abstracts database operations
-    """
-    
     def __init__(self):
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_KEY")
-        self.client: Client = create_client(url, key)
+        self.db = SessionLocal()
     
-    async def create_client(
-        self,
-        name: str,
-        email: str,
-        project_type: str,
-        requirements: List[str],
-        original_email: str
-    ) -> UUID:
-        """Store new client"""
-        
-        data = {
-            "client_name": name,
-            "client_email": email,
-            "project_type": project_type,
-            "requirements": requirements,
-            "original_email_body": original_email,
-            "status": "new"
-        }
-        
-        result = self.client.table("clients").insert(data).execute()
-        return result.data[0]["id"]
+    def create_client(self, state):
+        client = Client(
+            name=state['client_name'],
+            email=state['email_from'],
+            company=state.get('company'),
+            project_type=state['project_type'],
+            requirements=json.dumps(state.get('requirements', [])),
+            timeline=state.get('timeline'),
+            budget=state.get('budget'),
+            thread_id=state['thread_id']
+        )
+        self.db.add(client)
+        self.db.commit()
+        self.db.refresh(client)
+        return client.id
     
-    async def create_proposal(
-        self,
-        client_id: UUID,
-        plan: Dict,
-        text: str,
-        cost_min: int,
-        cost_max: int
-    ) -> UUID:
-        """Store proposal"""
-        
-        data = {
-            "client_id": str(client_id),
-            "project_plan": plan,
-            "proposal_text": text,
-            "estimated_cost_min": cost_min,
-            "estimated_cost_max": cost_max,
-            "status": "pending_approval"
-        }
-        
-        result = self.client.table("proposals").insert(data).execute()
-        return result.data[0]["id"]
+    def create_proposal(self, client_id, state, draft_id):
+        proposal = Proposal(
+            client_id=client_id,
+            proposal_text=state['proposal_text'],
+            cost_min=state['cost_estimate']['min'],
+            cost_max=state['cost_estimate']['max'],
+            draft_id=draft_id,
+            status='pending'
+        )
+        self.db.add(proposal)
+        self.db.commit()
+        self.db.refresh(proposal)
+        return proposal.id
     
-    async def get_pending_proposals(self) -> List[Dict]:
-        """Fetch proposals needing approval"""
-        
-        result = self.client.table("proposals") \
-            .select("*") \
-            .eq("status", "pending_approval") \
-            .execute()
-        
-        return result.data
+    def get_pending_proposals(self):
+        proposals = self.db.query(Proposal).filter(Proposal.status == 'pending').all()
+        result = []
+        for p in proposals:
+            client = self.db.query(Client).filter(Client.id == p.client_id).first()
+            result.append({
+                'id': p.id,
+                'client_name': client.name,
+                'client_email': client.email,
+                'project_type': client.project_type,
+                'proposal_text': p.proposal_text,
+                'cost_min': p.cost_min,
+                'cost_max': p.cost_max,
+                'status': p.status
+            })
+        return result
     
-    async def approve_proposal(self, proposal_id: UUID) -> bool:
-        """Mark proposal as approved"""
-        
-        self.client.table("proposals") \
-            .update({"status": "approved", "approved_by_human": True}) \
-            .eq("id", str(proposal_id)) \
-            .execute()
-        
-        return True
+    def get_proposal(self, proposal_id):
+        return self.db.query(Proposal).filter(Proposal.id == proposal_id).first()
+    
+    def approve_proposal(self, proposal_id):
+        proposal = self.get_proposal(proposal_id)
+        if proposal:
+            proposal.approved = True
+            proposal.status = 'approved'
+            self.db.commit()
+    
+    def mark_sent(self, proposal_id):
+        proposal = self.get_proposal(proposal_id)
+        if proposal:
+            proposal.status = 'sent'
+            proposal.sent_at = datetime.utcnow()
+            self.db.commit()
+    
+    def reject_proposal(self, proposal_id):
+        proposal = self.get_proposal(proposal_id)
+        if proposal:
+            proposal.status = 'rejected'
+            self.db.commit()
+    
+    def is_email_processed(self, email_id):
+        # Simple check - expand later
+        return False
+    
+    def close(self):
+        self.db.close()

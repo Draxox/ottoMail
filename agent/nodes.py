@@ -1,273 +1,178 @@
-from typing import Dict, Any
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from agent.state import EmailAgentState
+"""Individual agent processing nodes"""
 import json
+from typing import Dict, Any
+from langchain_core.messages import SystemMessage, HumanMessage
+from integrations.openai_service import LLMService
 
-class EmailAgentNodes:
-    """
-    Individual processing nodes in the agent workflow
-    Each node is a pure function: State -> State
-    """
-    
-    def __init__(self, llm: ChatOpenAI):
+class AgentNodes:
+    def __init__(self, llm: LLMService):
         self.llm = llm
     
-    async def classify_email(self, state: EmailAgentState) -> EmailAgentState:
+    async def classify_email(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Node 1: Classify if business inquiry"""
+        prompt = f"""
+        Analyze this email and determine if it's a genuine business inquiry.
+        
+        Subject: {state['email_subject']}
+        From: {state['email_from']}
+        Body: {state['email_body']}
+        
+        Return JSON only:
+        {{
+            "is_valid": true/false,
+            "confidence": 0.0-1.0,
+            "reason": "brief explanation"
+        }}
         """
-        Node 1: Classify if email is a valid business inquiry
-        Uses AI to filter spam, auto-replies, etc.
-        """
         
-        prompt = f"""Analyze this email and determine if it's a genuine business inquiry.
-
-Email Subject: {state['email_subject']}
-Email Body: {state['email_body']}
-
-Respond with JSON:
-{{
-    "is_valid_inquiry": true/false,
-    "confidence": 0.0-1.0,
-    "reason": "explanation",
-    "inquiry_type": "website_redesign" | "mobile_app" | "consulting" | "other"
-}}
-"""
+        try:
+            response = await self.llm.invoke(prompt)
+            result = json.loads(response)
+            
+            state.update({
+                "is_valid_inquiry": result["is_valid"],
+                "confidence_score": result["confidence"],
+                "current_step": "classified"
+            })
+        except Exception as e:
+            state.update({
+                "is_valid_inquiry": False,
+                "confidence_score": 0.0,
+                "current_step": "classification_failed",
+                "error": str(e)
+            })
         
-        response = await self.llm.ainvoke([
-            SystemMessage(content="You are an email classifier for a software agency."),
-            HumanMessage(content=prompt)
-        ])
-        
-        result = json.loads(response.content)
-        
-        return {
-            **state,
-            "is_valid_inquiry": result["is_valid_inquiry"],
-            "confidence_score": result["confidence"],
-            "processing_step": "classified"
-        }
+        return state
     
-    async def extract_requirements(self, state: EmailAgentState) -> EmailAgentState:
+    async def extract_requirements(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Node 2: Extract client data"""
+        prompt = f"""
+        Extract structured client information. Return JSON only.
+        
+        From: {state['email_from']}
+        Subject: {state['email_subject']}
+        Body: {state['email_body']}
+        
+        {{
+            "client_name": "name from signature/body",
+            "company": "company name or null",
+            "project_type": "main project type",
+            "requirements": ["req1", "req2", ...],
+            "timeline": "timeline or null",
+            "budget": "budget info or 'Flexible'"
+        }}
         """
-        Node 2: Extract structured client data using OpenAI Structured Outputs
-        Pro Tip: Use JSON Schema for guaranteed structure
-        """
         
-        from pydantic import BaseModel, Field
-        from typing import List
+        try:
+            response = await self.llm.invoke(prompt)
+            data = json.loads(response)
+            
+            state.update({
+                **data,
+                "current_step": "extracted"
+            })
+        except:
+            state.update({
+                "client_name": "Unknown Client",
+                "project_type": "General Inquiry",
+                "requirements": ["Manual review needed"],
+                "current_step": "extraction_failed"
+            })
         
-        class ClientRequirements(BaseModel):
-            client_name: str = Field(description="Person's name from signature or body")
-            company: Optional[str] = Field(description="Company name if mentioned")
-            project_type: str = Field(description="Type of project requested")
-            requirements: List[str] = Field(description="List of specific requirements")
-            timeline: Optional[str] = Field(description="Desired timeline")
-            budget: str = Field(description="Budget information or 'Flexible'")
-        
-        # Structured output ensures reliability (Pro Tip from web:45)
-        structured_llm = self.llm.with_structured_output(ClientRequirements)
-        
-        prompt = f"""Extract structured client information from this email:
-
-Subject: {state['email_subject']}
-Body: {state['email_body']}
-From: {state['email_from']}
-
-Extract all requirements mentioned explicitly or implicitly."""
-        
-        extracted = await structured_llm.ainvoke(prompt)
-        
-        return {
-            **state,
-            "extracted_data": extracted.dict(),
-            "processing_step": "extracted"
-        }
+        return state
     
-    async def generate_project_plan(self, state: EmailAgentState) -> EmailAgentState:
+    async def generate_plan(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Node 3: Create project plan"""
+        requirements = ', '.join(state.get('requirements', []))
+        
+        prompt = f"""
+        Create project breakdown for: {state['project_type']}
+        Requirements: {requirements}
+        
+        Return JSON only:
+        {{
+            "phases": [
+                {{"name": "Phase 1", "tasks": ["task1", "task2"], "duration": "1 week"}},
+                ...
+            ],
+            "total_hours": 40,
+            "complexity": "simple|medium|complex"
+        }}
         """
-        Node 3: Create task breakdown using AI with ReAct pattern
-        """
         
-        extracted = state["extracted_data"]
+        try:
+            response = await self.llm.invoke(prompt)
+            state["project_plan"] = json.loads(response)
+            state["current_step"] = "planned"
+        except:
+            state["project_plan"] = {
+                "phases": [{"name": "Standard Project", "tasks": ["Planning", "Development", "Review"], "duration": "4-6 weeks"}],
+                "total_hours": 40,
+                "complexity": "medium"
+            }
+            state["current_step"] = "planned_fallback"
         
-        prompt = f"""As a senior project manager, create a detailed project breakdown.
-
-Project Type: {extracted['project_type']}
-Requirements: {', '.join(extracted['requirements'])}
-Timeline: {extracted.get('timeline', 'To be determined')}
-
-Generate a JSON project plan with:
-- phases (array of {{name, tasks, duration}})
-- total_estimated_hours (integer)
-- complexity_level (simple/medium/complex)
-"""
-        
-        response = await self.llm.ainvoke([
-            SystemMessage(content="You are a project planning expert. Return only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        project_plan = json.loads(response.content)
-        
-        return {
-            **state,
-            "project_plan": project_plan,
-            "processing_step": "planned"
-        }
+        return state
     
-    async def calculate_cost(self, state: EmailAgentState) -> EmailAgentState:
-        """
-        Node 4: Business logic for cost calculation
-        No AI needed - pure business rules
-        """
+    async def calculate_cost(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Node 4: Pure business logic (no LLM)"""
+        from app.services.cost_service import calculate_cost
         
-        plan = state["project_plan"]
-        hours = plan.get("total_estimated_hours", 40)
-        complexity = plan.get("complexity_level", "medium")
+        cost_data = calculate_cost(
+            state["project_plan"]["total_hours"],
+            state["project_plan"]["complexity"]
+        )
         
-        # Your business logic
-        base_rate = 50
-        multipliers = {"simple": 1.0, "medium": 1.5, "complex": 2.0}
-        
-        base_cost = hours * base_rate * multipliers.get(complexity, 1.5)
-        
-        cost_estimate = {
-            "min": int(base_cost * 0.9),
-            "max": int(base_cost * 1.1),
-            "hours": hours,
-            "complexity": complexity
-        }
-        
-        return {
-            **state,
-            "cost_estimate": cost_estimate,
-            "processing_step": "costed"
-        }
+        state["cost_estimate"] = cost_data
+        state["current_step"] = "costed"
+        return state
     
-    async def generate_proposal(self, state: EmailAgentState) -> EmailAgentState:
-        """
-        Node 5: Generate professional proposal text
-        """
-        
-        extracted = state["extracted_data"]
-        plan = state["project_plan"]
+    async def generate_proposal(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Node 5: Generate proposal text"""
+        phases = state["project_plan"]["phases"]
+        phases_text = "\n".join([f"• {p['name']}: {p['duration']}" for p in phases])
         cost = state["cost_estimate"]
         
-        phases_text = "\n".join([
-            f"- {phase['name']}: {phase['duration']}" 
-            for phase in plan['phases']
-        ])
+        prompt = f"""
+        Write professional proposal email (BODY ONLY):
         
-        prompt = f"""Write a professional proposal email for:
-
-Client: {extracted['client_name']}
-Company: {extracted.get('company', 'their organization')}
-Project: {extracted['project_type']}
-
-Key Points:
-{phases_text}
-
-Timeline: {extracted.get('timeline', '6-8 weeks')}
-Cost: ${cost['min']:,} - ${cost['max']:,}
-
-Tone: Professional but friendly, concise (200-250 words)
-Include: Understanding of needs, our approach, timeline, cost, next steps
-"""
+        Client: {state['client_name']}
+        Company: {state.get('company', 'their organization')}
+        Project: {state['project_type']}
         
-        response = await self.llm.ainvoke([
-            SystemMessage(content="You are a professional business proposal writer."),
-            HumanMessage(content=prompt)
-        ])
+        Scope:
+        {phases_text}
         
-        return {
-            **state,
-            "proposal_text": response.content,
-            "processing_step": "proposal_generated"
-        }
-    
-    async def store_in_database(self, state: EmailAgentState) -> EmailAgentState:
-        """
-        Node 6: Persist to database
+        Cost: ${cost['min']:,} - ${cost['max']:,}
+        Timeline: {state.get('timeline', '4-6 weeks')}
+        
+        Tone: Professional, friendly, concise (200 words).
+        Include: Understanding needs, our approach, timeline, cost, next steps.
         """
         
-        from integrations.storage import StorageService
+        try:
+            state["proposal_text"] = await self.llm.invoke(prompt)
+            state["current_step"] = "proposal_generated"
+        except Exception as e:
+            state["proposal_text"] = f"""
+            Dear {state['client_name']},
+            
+            Thank you for your inquiry about {state['project_type']}. We're excited to help!
+            
+            Our proposed approach:
+            {phases_text}
+            
+            Estimated timeline: {state.get('timeline', '4-6 weeks')}
+            Investment: ${cost['min']:,} - ${cost['max']:,}
+            
+            Next steps:
+            1. Schedule discovery call
+            2. Finalize requirements
+            3. Kickoff project
+            
+            Best regards,
+            Your Development Team
+            """
+            state["current_step"] = "proposal_fallback"
         
-        storage = StorageService()
-        
-        # Store client
-        client_id = await storage.create_client(
-            name=state["extracted_data"]["client_name"],
-            email=state["email_from"],
-            project_type=state["extracted_data"]["project_type"],
-            requirements=state["extracted_data"]["requirements"],
-            original_email=state["email_body"]
-        )
-        
-        # Store proposal
-        proposal_id = await storage.create_proposal(
-            client_id=client_id,
-            plan=state["project_plan"],
-            text=state["proposal_text"],
-            cost_min=state["cost_estimate"]["min"],
-            cost_max=state["cost_estimate"]["max"]
-        )
-        
-        return {
-            **state,
-            "client_id": str(client_id),
-            "proposal_id": str(proposal_id),
-            "processing_step": "stored"
-        }
-    
-    async def create_email_draft(self, state: EmailAgentState) -> EmailAgentState:
-        """
-        Node 7: Create Gmail draft (never auto-send)
-        Pro Tip #1: Human review before sending
-        """
-        
-        from integrations.gmail_mcp import GmailMCP
-        
-        gmail = GmailMCP()
-        
-        subject = f"{state['extracted_data']['project_type']} Proposal"
-        if state['extracted_data'].get('company'):
-            subject += f" – {state['extracted_data']['company']}"
-        
-        draft_id = await gmail.create_draft(
-            to=state["email_from"],
-            subject=subject,
-            body=state["proposal_text"]
-        )
-        
-        return {
-            **state,
-            "processing_step": "draft_created",
-            "needs_human_review": True
-        }
-    
-    async def send_notification(self, state: EmailAgentState) -> EmailAgentState:
-        """
-        Node 8: Notify human for approval
-        Pro Tip #3: Human-in-the-loop
-        """
-        
-        from integrations.telegram_service import TelegramService
-        
-        telegram = TelegramService()
-        
-        message = f"""
-🔔 New Proposal Ready
-
-👤 {state['extracted_data']['client_name']}
-📋 {state['extracted_data']['project_type']}
-💰 ${state['cost_estimate']['min']:,} - ${state['cost_estimate']['max']:,}
-
-Review at: /proposals/{state['proposal_id']}
-"""
-        
-        await telegram.send_message(message)
-        
-        return {
-            **state,
-            "processing_step": "notified"
-        }
+        return state
