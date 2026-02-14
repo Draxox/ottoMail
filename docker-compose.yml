@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: email_copilot
+      POSTGRES_USER: copilot
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://copilot:${DB_PASSWORD}@postgres/email_copilot
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY}  # For LangSmith
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_KEY: ${SUPABASE_KEY}
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./credentials.json:/app/credentials.json
+      - ./token.pickle:/app/token.pickle
+
+  celery_worker:
+    build: .
+    command: celery -A workers.tasks worker --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql://copilot:${DB_PASSWORD}@postgres/email_copilot
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./credentials.json:/app/credentials.json
+      - ./token.pickle:/app/token.pickle
+
+  celery_beat:
+    build: .
+    command: celery -A workers.tasks beat --loglevel=info
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
