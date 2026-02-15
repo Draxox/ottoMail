@@ -19,6 +19,7 @@ class Client(Base):
     budget = Column(String(100))
     status = Column(String(50), default="new")
     thread_id = Column(String(255))
+    email_id = Column(String(255), unique=True)  # Gmail message ID for deduplication
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Proposal(Base):

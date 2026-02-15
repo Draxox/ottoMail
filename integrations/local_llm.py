@@ -1,8 +1,14 @@
 """Local LLM Service using GPT4All with GPU acceleration"""
 import os
 import sys
-from gpt4all import GPT4All
 from pydantic_settings import BaseSettings
+
+try:
+    from gpt4all import GPT4All
+    GPT4ALL_AVAILABLE = True
+except ImportError:
+    GPT4ALL_AVAILABLE = False
+    GPT4All = None
 
 class LLMConfig(BaseSettings):
     LLM_MODEL_PATH: str = "Meta-Llama-3-8B-Instruct.Q4_0.gguf"
@@ -18,6 +24,12 @@ class LocalLLMService:
     _model_instance = None
 
     def __init__(self):
+        if not GPT4ALL_AVAILABLE:
+            print("⚠️  gpt4all not installed. Install with: pip install gpt4all>=2.8.0")
+            print("Falling back to Mock Service.")
+            LocalLLMService._model_instance = None
+            return
+        
         if not LocalLLMService._model_instance:
             print(f"Loading Local LLM: {config.LLM_MODEL_PATH} on {config.LLM_DEVICE}...")
             try:

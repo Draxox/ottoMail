@@ -11,8 +11,8 @@ class StorageService:
         self.db = SessionLocal()
     
     def create_client(self, state):
-        # Check if client already exists
-        existing_client = self.db.query(Client).filter(Client.email == state['email_from']).first()
+        # Check if client already exists by email_id (Gmail message ID)
+        existing_client = self.db.query(Client).filter(Client.email_id == state.get('email_id')).first()
         if existing_client:
             return existing_client.id
             
@@ -24,7 +24,8 @@ class StorageService:
             requirements=json.dumps(state.get('requirements', [])),
             timeline=state.get('timeline'),
             budget=state.get('budget'),
-            thread_id=state['thread_id']
+            thread_id=state['thread_id'],
+            email_id=state.get('email_id')  # Store Gmail message ID
         )
         self.db.add(client)
         self.db.commit()
@@ -89,8 +90,9 @@ class StorageService:
             self.db.commit()
     
     def is_email_processed(self, email_id):
-        # Simple check - expand later
-        return False
+        """Check if email has already been processed by looking up email_id in database"""
+        existing = self.db.query(Client).filter(Client.email_id == email_id).first()
+        return existing is not None
     
     def close(self):
         self.db.close()

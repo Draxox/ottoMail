@@ -12,6 +12,7 @@ langgraph==0.2.45
 langchain-core>=0.2.43
 langchain-openai==0.2.8
 langchain-google-genai==2.0.0
+gpt4all>=2.8.0
 
 # Gmail
 google-auth==2.36.0
