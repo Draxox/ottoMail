@@ -1,4 +1,7 @@
 """Main FastAPI application"""
+from dotenv import load_dotenv
+load_dotenv()
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse

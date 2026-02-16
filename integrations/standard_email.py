@@ -51,9 +51,11 @@ class StandardEmailService:
             email_ids = messages[0].split()
             # Get latest 5 emails
             email_ids = email_ids[-max_results:]
+            print(f"[DEBUG] Fetching emails: {email_ids}")
             
             results = []
             for e_id in email_ids:
+                print(f"[DEBUG] Fetching email ID: {e_id}")
                 _, msg_data = mail.fetch(e_id, "(RFC822)")
                 for response_part in msg_data:
                     if isinstance(response_part, tuple):

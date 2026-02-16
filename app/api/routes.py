@@ -11,39 +11,50 @@ router = APIRouter()
 @router.post("/check-emails")
 async def check_emails():
     """Process unread emails"""
-    gmail = StandardEmailService()
-    llm = UnifiedLLM()
-    agent = EmailAgentGraph(llm)
-    storage = StorageService()
-    
-    emails = await gmail.get_unread_emails()
-    results = []
-    
-    for email in emails:
-        # Skip processed emails
-        if storage.is_email_processed(email["id"]):
-            continue
-            
-        state = await agent.process_email(email)
+    try:
+        gmail = StandardEmailService()
+        llm = UnifiedLLM()
+        agent = EmailAgentGraph(llm)
+        storage = StorageService()
         
-        if not state["is_valid_inquiry"]:
-            await gmail.mark_as_read(email["id"])
-            continue
+        emails = await gmail.get_unread_emails()
+        results = []
         
-        # Save to database
-        client_id = storage.create_client(state)
-        draft_id = await gmail.create_draft(
-            to=state["email_from"],
-            subject=f"{state['project_type']} Proposal",
-            body=state["proposal_text"],
-            thread_id=state["thread_id"]
-        )
-        proposal_id = storage.create_proposal(client_id, state, draft_id)
+        for email in emails:
+            try:
+                # Skip processed emails
+                if storage.is_email_processed(email["id"]):
+                    print(f"[DEBUG] Skipping already processed email: {email['id']}")
+                    continue
+                    
+                state = await agent.process_email(email)
+                
+                if not state["is_valid_inquiry"]:
+                    await gmail.mark_as_read(email["id"])
+                    continue
+                
+                # Save to database
+                client_id = storage.create_client(state)
+                draft_id = await gmail.create_draft(
+                    to=state["email_from"],
+                    subject=f"{state['project_type']} Proposal",
+                    body=state["proposal_text"],
+                    thread_id=state["thread_id"]
+                )
+                proposal_id = storage.create_proposal(client_id, state, draft_id)
+                
+                await gmail.mark_as_read(email["id"])
+                results.append({"proposal_id": proposal_id, "status": "success"})
+            except Exception as e:
+                print(f"[ERROR] Failed to process email {email.get('id', 'unknown')}: {e}")
+                # Continue processing other emails even if one fails
+                continue
         
-        await gmail.mark_as_read(email["id"])
-        results.append({"proposal_id": proposal_id, "status": "success"})
-    
-    return {"processed": len(results)}
+        return {"processed": len(results)}
+    except Exception as e:
+        print(f"[ERROR] Failed to check emails: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing emails: {str(e)}")
+
 
 @router.get("/proposals/pending")
 async def get_pending_proposals():
